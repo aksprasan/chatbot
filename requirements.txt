@@ -1,6 +1,2 @@
-torch
-transformers
-peft
-accelerate
-sentencepiece
 streamlit
+openai
