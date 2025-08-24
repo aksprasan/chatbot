@@ -1,34 +1,21 @@
-from peft import PeftModel
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import torch
 import streamlit as st
+from openai import OpenAI
 
-# ------------------ MODEL SETUP ------------------
-@st.cache_resource
-def load_model():
-    base_model = AutoModelForCausalLM.from_pretrained(
-        "tiiuae/falcon-7b",
-        device_map="auto",
-        torch_dtype=torch.bfloat16
-    )
-    model = PeftModel.from_pretrained(base_model, "Amod/falcon7b-mental-health-counseling")
-    tokenizer = AutoTokenizer.from_pretrained("tiiuae/falcon-7b")
-    return model, tokenizer
+OPENAI_API_KEY="..."
 
-model, tokenizer = load_model()
-
-# ------------------ APP TITLE ------------------
+# Title and description
 st.title("Hi, I am Lada! ")
 st.write("I'm your Mindfulness Buddy!")
 
-# ------------------ CHAT HISTORY ------------------
+# Initialize chat history
 if "messages" not in st.session_state:
     st.session_state.messages = []
 
+# Start conversation with a default message if just started
 if len(st.session_state.messages) == 0:
     st.session_state.messages.append({
         "role": "assistant",
-        "content": "Hi I am Lada, your Mindfulness Buddy. I'm here to chat with you about how you're feeling and counsel you through any issue you're having. How are you feeling today?"
+        "content": "Hi I am Lada, your Mindfulness Buddy. I'm here to chat with you about how you're feeling and counsel you through any issue they're having. How are you feeling today?"
     })
 
 # Restart button
@@ -36,50 +23,9 @@ if st.button("Start Over"):
     st.session_state.messages = []
     st.session_state.messages.append({
         "role": "assistant",
-        "content": "Hi I am Lada, your Mindfulness Buddy. I'm here to chat with you about how you're feeling and counsel you through any issue you're having. How are you feeling today?"
+        "content": "Hi I am Lada, you Mindfulness Buddy. I'm here to chat with you about how you're feeling and counsel you through any issue they're having. How are you feeling today?"
     })
     st.rerun()
-
-# ------------------ PERSONALITY PROMPT ------------------
-ai_instructions = """You are MindfulBuddy, a friendly AI that helps teenagers with their emotions.
-- Be supportive, kind, and understanding
-- Use language teenagers can understand
-- If they ask for advice, provide simple, actionable suggestions
-- If they mention wanting to hurt themselves or others, always tell them to calm down and encourage them to talk to a trusted adult immediately
-- Suggest simple ways to feel better when appropriate (like deep breathing or talking to friends)
-- Avoid complex jargon
-- Keep responses short and friendly
-"""
-
-# ------------------ RESPONSE FUNCTION ------------------
-def generate_response(prompt, history):
-    # Add user input to history
-    history.append({"role": "user", "content": prompt})
-
-    # Turn history into conversation text
-    conversation = "System: " + ai_instructions + "\n"
-    for m in history:
-        conversation += f"{m['role'].capitalize()}: {m['content']}\n"
-
-    inputs = tokenizer(conversation, return_tensors="pt").to(model.device)
-
-    with torch.no_grad():
-        outputs = model.generate(
-            **inputs,
-            max_new_tokens=150,
-            do_sample=True,
-            temperature=0.7,
-            top_p=0.9
-        )
-
-    response = tokenizer.decode(outputs[0], skip_special_tokens=True)
-    bot_reply = response.split("Assistant:")[-1].strip()
-
-    history.append({"role": "assistant", "content": bot_reply})
-    return bot_reply
-
-# ------------------ CHAT UI ------------------
-st.subheader("Chat with Lada")
 
 # Display all messages
 for message in st.session_state.messages:
@@ -87,12 +33,47 @@ for message in st.session_state.messages:
         st.write(message["content"])
 
 # Handle user input
-if prompt := st.chat_input("Type here to chat with Lada..."):
+if prompt := st.chat_input("Type here to chat with MindfulBuddy..."):
     with st.chat_message("user"):
         st.write(prompt)
     st.session_state.messages.append({"role": "user", "content": prompt})
 
-    with st.chat_message("assistant"):
-        with st.spinner("Thinking..."):
-            reply = generate_response(prompt, st.session_state.messages)
-            st.write(reply)
+    # Define assistant behavior and personality
+    ai_instructions = """You are MindfulBuddy, a friendly AI that helps teenagers with their emotions.
+    - Be supportive, kind, and understanding
+    - Use language teenagers can understand
+    - If they ask for advice, provide simple, actionable suggestions
+    - If they metion wanting to hurt themselves or others, always tell them to calm down and think about it, and encourage them to talk to a trusted adult immediately
+    - Suggest simple ways to feel better when appropriate (like deep breathing or talking to friends)
+    - Avoid complex jargon or overly technical terms
+    - Always suggest that they can talk to you about anything
+    - If they mention feeling sad, anxious, or stressed, tell them it's okay to feel that way and encourage to talk about it
+    - If they mention feeling happy, encourage them and celebrate their happiness
+    - If they mention feeling angry, suggest ways to calm down like taking deep breaths or counting
+    - NEVER give medical advice or diagnose conditions
+    - If someone mentions harming themselves or others, always encourage them to talk to a trusted adult immediately
+    - Keep responses fairly short and friendly
+    - Use slang and casual language when appropriate, but always be respectful
+    """
+
+    # Compile messages for OpenAI
+    messages_for_ai = [{"role": "system", "content": ai_instructions}] + st.session_state.messages
+
+    try:
+        with st.chat_message("assistant"):
+            with st.spinner("Thinking..."):
+                client = OpenAI(api_key=MY_API_KEY)
+                response = client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=messages_for_ai,
+                    temperature=0.7,
+                    max_tokens=75,
+                )
+                buddy_response = response.choices[0].message.content
+                st.write(buddy_response)
+                st.session_state.messages.append({
+                    "role": "assistant",
+                    "content": buddy_response
+                })
+    except Exception as e:
+        st.error(f"Something went wrong: {str(e)}")
