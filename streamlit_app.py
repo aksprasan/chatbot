@@ -1,56 +1,98 @@
+from peft import PeftModel
+from transformers import AutoModelForCausalLM, AutoTokenizer
+import torch
 import streamlit as st
-from openai import OpenAI
 
-# Show title and description.
-st.title("💬 Chatbot")
-st.write(
-    "This is a simple chatbot that uses OpenAI's GPT-3.5 model to generate responses. "
-    "To use this app, you need to provide an OpenAI API key, which you can get [here](https://platform.openai.com/account/api-keys). "
-    "You can also learn how to build this app step by step by [following our tutorial](https://docs.streamlit.io/develop/tutorials/llms/build-conversational-apps)."
-)
+# ------------------ MODEL SETUP ------------------
+@st.cache_resource
+def load_model():
+    base_model = AutoModelForCausalLM.from_pretrained(
+        "tiiuae/falcon-7b",
+        device_map="auto",
+        torch_dtype=torch.bfloat16
+    )
+    model = PeftModel.from_pretrained(base_model, "Amod/falcon7b-mental-health-counseling")
+    tokenizer = AutoTokenizer.from_pretrained("tiiuae/falcon-7b")
+    return model, tokenizer
 
-# Ask user for their OpenAI API key via `st.text_input`.
-# Alternatively, you can store the API key in `./.streamlit/secrets.toml` and access it
-# via `st.secrets`, see https://docs.streamlit.io/develop/concepts/connections/secrets-management
-openai_api_key = st.text_input("OpenAI API Key", type="password")
-if not openai_api_key:
-    st.info("Please add your OpenAI API key to continue.", icon="🗝️")
-else:
+model, tokenizer = load_model()
 
-    # Create an OpenAI client.
-    client = OpenAI(api_key=openai_api_key)
+# ------------------ APP TITLE ------------------
+st.title("Hi, I am Lada! ")
+st.write("I'm your Mindfulness Buddy!")
 
-    # Create a session state variable to store the chat messages. This ensures that the
-    # messages persist across reruns.
-    if "messages" not in st.session_state:
-        st.session_state.messages = []
+# ------------------ CHAT HISTORY ------------------
+if "messages" not in st.session_state:
+    st.session_state.messages = []
 
-    # Display the existing chat messages via `st.chat_message`.
-    for message in st.session_state.messages:
-        with st.chat_message(message["role"]):
-            st.markdown(message["content"])
+if len(st.session_state.messages) == 0:
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": "Hi I am Lada, your Mindfulness Buddy. I'm here to chat with you about how you're feeling and counsel you through any issue you're having. How are you feeling today?"
+    })
 
-    # Create a chat input field to allow the user to enter a message. This will display
-    # automatically at the bottom of the page.
-    if prompt := st.chat_input("What is up?"):
+# Restart button
+if st.button("Start Over"):
+    st.session_state.messages = []
+    st.session_state.messages.append({
+        "role": "assistant",
+        "content": "Hi I am Lada, your Mindfulness Buddy. I'm here to chat with you about how you're feeling and counsel you through any issue you're having. How are you feeling today?"
+    })
+    st.rerun()
 
-        # Store and display the current prompt.
-        st.session_state.messages.append({"role": "user", "content": prompt})
-        with st.chat_message("user"):
-            st.markdown(prompt)
+# ------------------ PERSONALITY PROMPT ------------------
+ai_instructions = """You are MindfulBuddy, a friendly AI that helps teenagers with their emotions.
+- Be supportive, kind, and understanding
+- Use language teenagers can understand
+- If they ask for advice, provide simple, actionable suggestions
+- If they mention wanting to hurt themselves or others, always tell them to calm down and encourage them to talk to a trusted adult immediately
+- Suggest simple ways to feel better when appropriate (like deep breathing or talking to friends)
+- Avoid complex jargon
+- Keep responses short and friendly
+"""
 
-        # Generate a response using the OpenAI API.
-        stream = client.chat.completions.create(
-            model="gpt-3.5-turbo",
-            messages=[
-                {"role": m["role"], "content": m["content"]}
-                for m in st.session_state.messages
-            ],
-            stream=True,
+# ------------------ RESPONSE FUNCTION ------------------
+def generate_response(prompt, history):
+    # Add user input to history
+    history.append({"role": "user", "content": prompt})
+
+    # Turn history into conversation text
+    conversation = "System: " + ai_instructions + "\n"
+    for m in history:
+        conversation += f"{m['role'].capitalize()}: {m['content']}\n"
+
+    inputs = tokenizer(conversation, return_tensors="pt").to(model.device)
+
+    with torch.no_grad():
+        outputs = model.generate(
+            **inputs,
+            max_new_tokens=150,
+            do_sample=True,
+            temperature=0.7,
+            top_p=0.9
         )
 
-        # Stream the response to the chat using `st.write_stream`, then store it in 
-        # session state.
-        with st.chat_message("assistant"):
-            response = st.write_stream(stream)
-        st.session_state.messages.append({"role": "assistant", "content": response})
+    response = tokenizer.decode(outputs[0], skip_special_tokens=True)
+    bot_reply = response.split("Assistant:")[-1].strip()
+
+    history.append({"role": "assistant", "content": bot_reply})
+    return bot_reply
+
+# ------------------ CHAT UI ------------------
+st.subheader("Chat with Lada")
+
+# Display all messages
+for message in st.session_state.messages:
+    with st.chat_message(message["role"]):
+        st.write(message["content"])
+
+# Handle user input
+if prompt := st.chat_input("Type here to chat with Lada..."):
+    with st.chat_message("user"):
+        st.write(prompt)
+    st.session_state.messages.append({"role": "user", "content": prompt})
+
+    with st.chat_message("assistant"):
+        with st.spinner("Thinking..."):
+            reply = generate_response(prompt, st.session_state.messages)
+            st.write(reply)
